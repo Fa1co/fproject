@@ -16,15 +16,13 @@ import multiprocessing
 import pandas as pd
 
 
-
-
 def get_page_data(driver, page, url, result):
     driver.get(f'{url}&p={page}')
     time.sleep(2)
 
-    soup = BeautifulSoup(driver.page_source, 'html.parser')
+    soup = BeautifulSoup(driver.page_source, 'lxml')
     soup.encode("utf-8")
-    products = soup.findAll(class_='catalog-product ui-button-widget')
+    products = soup.findAll('div', class_='catalog-product ui-button-widget')
     if len(products) == 0:
         return
     # Категориz
@@ -42,6 +40,12 @@ def get_page_data(driver, page, url, result):
             product_name = product.find(class_='catalog-product__name ui-link ui-link_black').text
         except:
             product_name = 'Нет названия'
+
+        try:
+            product_id = product['data-product']
+        except Exception:
+            print(Exception)
+
         # доступен или нет к продаже
         if product.find(class_='order-avail-wrap__link ui-link ui-link_blue'):
             product_is_available = product.find(class_='order-avail-wrap__link ui-link ui-link_blue').text.strip()
@@ -63,18 +67,78 @@ def get_page_data(driver, page, url, result):
         elif product.find(class_='catalog-product__image').find('img').has_attr('src'):
             url_to_product_main_img = product.find(class_='catalog-product__image').find('img')['src']
 
+        imgs_list = get_all_img(product_id, driver)
+        product_characteristics = get_characteristics(product_id, driver)
+        product_description = get_description(product_id, driver)
+
+
+
+
         result.append(
             {
                 "product_category": product_category,
+                "product_id": product_id,
                 "product_name": product_name,
                 "product_is_available": product_is_available,
                 "product_price": product_price,
                 "url_to_product": url_to_product,
                 "url_to_product_main_img": url_to_product_main_img,
+                "url_to_product_all_img": imgs_list,
+                "product_characteristics": product_characteristics,
+                "product_description": product_description
             }
         )
     print(f"[INFO] Обработал страницу {page}")
 
+
+def get_all_img(product_id, driver):
+    url = 'https://www.dns-shop.ru/catalog/product/get-media-content/?id=' + product_id
+
+    imgs_list = []
+    driver.get(url)
+    try:
+        content = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'body > pre')))
+        parsed_json = json.loads(content.text)
+        for i in parsed_json["data"]["tabs"][0]["objects"]:
+            if i["id"].isdigit():
+                imgs_list.append(i["origSrc"]["orig"])
+    except Exception as error:
+        print(error)
+
+    return imgs_list
+
+
+def get_description(product_id, driver):
+    url = 'https://www.dns-shop.ru/product/microdata/' + product_id
+    driver.get(url)
+    product_description = ''
+    try:
+        content = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'body > pre')))
+        parsed_json = json.loads(content.text)
+        product_description = parsed_json["data"]["description"]
+    except Exception as error:
+        print(error)
+
+    return product_description
+
+def get_characteristics(product_id, driver):
+    url = 'https://www.dns-shop.ru/catalog/product/get-product-characteristics-actual/?id=' + product_id
+    driver.get(url)
+    characteristics = ''
+    try:
+        content = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'body > pre')))
+        parsed_json = json.loads(content.text)
+        soup = BeautifulSoup(parsed_json['html'], 'lxml')
+        product_characteristics_group_title = soup.findAll(class_='product-characteristics__group')
+        product_characteristics_spec_value = soup.findAll(class_='product-characteristics__spec')
+
+
+        for title, spec in zip(product_characteristics_group_title, product_characteristics_spec_value):
+            characteristics += title.text.strip().replace('\t', '') + spec.text.strip().replace('\t', '')
+
+    except Exception as error:
+        print(error)
+    return characteristics
 
 def gather_data(url, result):
     options = Options()
@@ -103,6 +167,7 @@ def gather_data(url, result):
     })
 
     driver.get(url)
+    driver.implicitly_wait(10)
     time.sleep(5)
     pages_count = int(driver.find_element(By.CLASS_NAME, 'products-count').text.split()[0]) // 18 + 1 if (int(
         driver.find_element(By.CLASS_NAME, 'products-count').text.split()[0]) // 18) > 0 else 1
@@ -110,113 +175,16 @@ def gather_data(url, result):
     for page in range(1, pages_count + 1):
         get_page_data(driver=driver, page=page, url=url, result=result)
 
-
-
     driver.close()
     driver.quit()
 
 
-def get_extra_info(product):
 
 
-    options = Options()
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument('--window-size=1200,1080')
-    driver = webdriver.Chrome(options=options)
 
-    stealth(
-        driver=driver,
-        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                   'Chrome/83.0.4103.53 Safari/537.36',
-        languages=["ru-RU", "ru"],
-        vendor="Google Inc.",
-        platform="Win32",
-        webgl_vendor="Intel Inc.",
-        renderer="Intel Iris OpenGL Engine",
-        fix_hairline=True,
-        run_on_insecure_origins=True,
-    )
-
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        'source': '''
-                   delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
-                   delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-                   delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-             '''
-    })
-
-    url = product['url_to_product']
-    driver.get(url)
-
-    if get_element_status(driver, url):
-        button = driver.find_element(by=By.CLASS_NAME, value='product-characteristics__expand')
-        button.click()
-
-        time.sleep(1)
-
-        product_page = BeautifulSoup(driver.page_source, 'html.parser')
-        product_page.encode("utf-8")
-
-        # Ссылки на все изображения
-        try:
-            url_to_product_all_imgs = []
-
-            imgs = product_page.findAll(class_='tns-item')
-
-            for img in imgs:
-                try:
-                    if img.find('img').has_attr('data-src'):
-                        url_to_product_all_imgs.append(img.find('img')['data-src'])
-                        continue
-                    elif img.find('img').has_attr('src'):
-                        url_to_product_all_imgs.append(img.find('img')['src'])
-                except Exception:
-                    pass
-        except:
-            url_to_product_all_imgs.append('Нет изображений')
-
-        # Характеристики
-        try:
-            product_characteristics = product_page.findAll(class_='product-characteristics-content')
-            tmp_str = ''
-
-            for characteristic in product_characteristics:
-                tmp_str += characteristic.text.strip().replace('\t', '')
-        except:
-            tmp_str = 'нет характеристик'
-        # Описание
-        try:
-            product_description = product_page.find(class_='product-card-description-text').text
-        except:
-            product_description = "Нет описания"
-        product.update(
-            {
-                'url_to_product_all_imgs': url_to_product_all_imgs,
-                'product_characteristics': tmp_str,
-                'product_description': product_description
-            }
-        )
-        return product
-
-
-def get_element_status(driver, url):
-    connection_attempts = 0
-    while connection_attempts < 3:
-        try:
-            driver.get(url)
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.CLASS_NAME, 'product-characteristics__expand')))
-            return True
-        except Exception as error:
-            print(error)
-            connection_attempts += 1
-            print(f"Ошибка в получение данных для: {url}")
-    return False
-
-
-def convert_csv_to_excel(csv_file, excel_file):
+def convert_csv_to_excel(csv_file):
     # Считываем файл CSV
-    df = pd.read_csv('data.csv')
+    df = pd.read_csv(csv_file)
 
     # Создаем объект ExcelWriter
     writer = pd.ExcelWriter('data.xlsx')
@@ -226,6 +194,7 @@ def convert_csv_to_excel(csv_file, excel_file):
 
     # Сохраняем файл
     writer.close()
+
 
 def main():
     start_time = time.time()
@@ -237,9 +206,12 @@ def main():
         'https://www.dns-shop.ru/catalog/17a9b8e516404e77/ryukzaki-dlya-noutbukov/?stock=now-today-tomorrow-later-out_of_stock',
         'https://www.dns-shop.ru/catalog/17a9b84716404e77/universalnye-bloki-pitaniya/?stock=now-today-tomorrow-later-out_of_stock']
 
+
+
+
     manager = Manager()
     products_data = manager.list()
-    connections = 5
+    connections = 3
 
     pool = Pool(connections)
 
@@ -249,21 +221,6 @@ def main():
     pool.close()
     pool.join()
 
-    result = []
-    counter = 0
-    print(f'Количество продуктов: {len(products_data)}')
-    with Pool(connections) as pool:
-        result = pool.map(get_extra_info, products_data)
-        print(f'Counter: {counter}')
-        counter += 1
-    # for product in products_data:
-    #     result.append(get_extra_info(product))
-
-
-    pool.close()
-    pool.join()
-
-    print(products_data)
 
     with open('data.csv', 'w', encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
@@ -280,19 +237,56 @@ def main():
                 "Описание"
             ]
         )
-        for data in result:
-            writer.writerow([
-                data["product_category"],
-                data["product_name"],
-                data["product_is_available"],
-                data["product_price"],
-                data["url_to_product"],
-                data["url_to_product_main_img"],
-                data['url_to_product_all_imgs'],
-                data['product_characteristics'],
-                data['product_description']
+        for data in products_data:
+            writer.writerow(
+                [
+                    data["product_category"],
+                    data["product_name"],
+                    data["product_is_available"],
+                    data["product_price"],
+                    data["url_to_product"],
+                    data["url_to_product_main_img"],
+                    data['url_to_product_all_img'],
+                    data['product_characteristics'],
+                    data['product_description']
+
             ]
-        )
+    )
+
+    # options = Options()
+    # options.add_argument("--disable-blink-features=AutomationControlled")
+    # options.add_argument('--window-size=1200,1080')
+    # driver = webdriver.Chrome(options=options)
+    #
+    # stealth(driver=driver,
+    #         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+    #                    'Chrome/83.0.4103.53 Safari/537.36',
+    #         languages=["ru-RU", "ru"],
+    #         vendor="Google Inc.",
+    #         platform="Win32",
+    #         webgl_vendor="Intel Inc.",
+    #         renderer="Intel Iris OpenGL Engine",
+    #         fix_hairline=True,
+    #         run_on_insecure_origins=True,
+    #         )
+    #
+    # driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+    #     'source': '''
+    #                    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    #                    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    #                    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+    #              '''
+    # })
+    #
+    # driver.get('https://www.dns-shop.ru/catalog/17a8ae4916404e77/televizory/?stock=now-today-tomorrow-later-out_of_stock')
+    # driver.implicitly_wait(5)
+    # time.sleep(1)
+    # soup = BeautifulSoup(driver.page_source, 'lxml')
+    # pages = soup.find("div", class_="catalog-product ui-button-widget")
+    # # pages = WebDriverWait(driver, 10).until(EC.presence_of_all_elements_located((By.CLASS_NAME, 'catalog-product')))
+    #
+    # print(len(pages))
+    # print(pages[-1].get_attribute('data-page-number'))
 
 
     finish_time = time.time() - start_time
@@ -301,3 +295,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    convert_csv_to_excel('data.csv')
